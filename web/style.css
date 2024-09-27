@@ -1,0 +1,44 @@
+* {
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+}
+body {
+	font-family: Tahoma;
+	background-color: #202020;
+}
+p {
+	color: #FFFFFF;
+}
+a {
+	text-decoration: none;
+	color: #FFFFFF;
+}
+ul {
+	list-style-type: none;
+}
+#navigation {
+	padding: 10px;
+}
+#navigation > ul {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+}
+#navigation > ul > li {
+	text-align: center;
+}
+#navigation > ul > li > a {
+	display: block;
+	padding: 10px 20px;
+}
+#logo {
+	font-size: 20px;
+}
+#discord-login {
+	background-color: #738ADB;
+	border-radius: 20px;
+	margin-right: 20px;
+	margin-left: auto;
+	border: 1px solid #000000;
+}
