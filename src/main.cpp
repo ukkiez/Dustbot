@@ -11,6 +11,9 @@
 #include <httplib.h>
 #include <thread>
 #include <functional>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 std::atomic<bool> running = true;
 httplib::Server httpServer;
@@ -56,6 +59,21 @@ int main (int argc, char *argv[]) {
 	}
 
 	sql = "DELETE FROM Guilds; DELETE FROM Channels;";
+	db_result = sqlite3_exec(discord_db, sql.c_str(), SQLiteCallback, NULL, &errMsg);
+	if (db_result != SQLITE_OK) {
+		std::cerr << "SQL Exec Error: " << errMsg << std::endl;
+		sqlite3_free(errMsg);
+	}
+
+	sql = std::string("CREATE TABLE IF NOT EXISTS 'OAuth2Users'(") +
+		"id BIGINT PRIMARY KEY," +
+		"name TEXT NOT NULL," +
+		"access_token TEXT NOT NULL," +
+		"token_type TEXT NOT NULL," +
+		"expiry BIGINT NOT NULL," +
+		"refresh_token TEXT NOT NULL," +
+		"scope TEXT NOT NULL" +
+	")";
 	db_result = sqlite3_exec(discord_db, sql.c_str(), SQLiteCallback, NULL, &errMsg);
 	if (db_result != SQLITE_OK) {
 		std::cerr << "SQL Exec Error: " << errMsg << std::endl;
@@ -190,15 +208,25 @@ int main (int argc, char *argv[]) {
 	std::ifstream oauth_token_file(app_directory + "../oauth_token.txt");
 	std::getline(oauth_token_file, oauth_token);
 
-	httpServer.Get("/", [&app_directory, &oauth_token](const httplib::Request &req, httplib::Response &res) {
+	httpServer.Get("/", [&app_directory](const httplib::Request &req, httplib::Response &res) {
 		std::ifstream file(app_directory + "../web/index.html");
 		std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+		res.set_content(content, "text/html");
+	});
+
+	httpServer.Get("/style.css", [&app_directory](const httplib::Request &req, httplib::Response &res) {
+		std::ifstream file(app_directory + "../web/style.css");
+		std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+		res.set_content(content, "text/css");
+	});
+
+	httpServer.Get("/discord-login", [&oauth_token](const httplib::Request &req, httplib::Response &res) {
 		if (req.has_param("code")) {
 			std::string code = req.get_param_value("code");
 			httplib::Params params = {
 				{ "grant_type", "authorization_code" },
 				{ "code", code },
-				{ "authorization_url", "http://localhost:8080/" }
+				{ "authorization_url", "http://dustbot.xyz/discord-login" }
 			};
 			std::string paramsString = "";
 			bool first = true;
@@ -213,21 +241,35 @@ int main (int argc, char *argv[]) {
 			std::cout << paramsString << std::endl;
 			httplib::SSLClient httpClient("discord.com", 443);
 			httpClient.set_basic_auth("1234389167576977458", oauth_token);
-			httplib::Result result = httpClient.Post("/api/oauth2/token", paramsString, "application/x-www-form-urlencoded");
-			if (result) {
-				std::cout << result->status << std::endl;
-				std::cout << result->body << std::endl;
+			httplib::Result getTokenResult = httpClient.Post("/api/v10/oauth2/token", paramsString, "application/x-www-form-urlencoded");
+			if (getTokenResult) {
+				json getTokenJson = json::parse(getTokenResult->body);
+				if (getTokenJson.contains("access_token")) {
+					httpClient.set_basic_auth(getTokenJson["token_type"], getTokenJson["access_token"]);
+					httplib::Result getUserResult = httpClient.Get("/api/v10/users/@me");
+					json getUserJson = json::parse(getUserResult->body);
+					sql = "INSERT INTO OAuth2Users(id, name, access_token, token_type, expiry, refresh_token, scope) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE";
+					db_result = sqlite3_prepare_v2(discord_db, sql.c_str(), -1, &stmt, nullptr);
+					sqlite3_stmt *stmt = nullptr;
+					if (db_result != SQLITE_OK) {
+						std::cerr << "SQL Prepare v2 Error: " << sqlite3_errmsg(discord_db) << std::endl;
+						sqlite3_free(errMsg);
+					}
+					sqlite3_bind_int64(stmt, 1, getUserJson["id"]); // I'm getting way too lazy to error check this every single time.
+					sqlite3_bind_text(stmt, 2, getUserJson["username"]);
+					sqlite3_bind_text(stmt, 3, getTokenJson["access_token"]);
+					sqlite3_bind_text(stmt, 4, getTokenJson["token_type"]);
+					int64_t seconds_since_epoch = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+					int64_t token_expiry = seconds_since_epoch + getTokenJson["expires_in"];
+					sqlite3_bind_int64(stmt, 5, token_expiry);
+					sqlite3_bind_text(stmt, 6, getTokenJson["refresh_token"]);
+					sqlite3_bind_text(stmt, 7, getTokenJson["scope"]);
+				}
 			} else {
-				std::cerr << "Error doing post: " << result.error() << std::endl;
+				std::cerr << "Error doing post: " << getTokenResult.error() << std::endl;
 			}
 		}
-		res.set_content(content, "text/html");
-	});
-
-	httpServer.Get("/style.css", [&app_directory](const httplib::Request &req, httplib::Response &res) {
-		std::ifstream file(app_directory + "../web/style.css");
-		std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-		res.set_content(content, "text/css");
+		res.set_redirect("/");
 	});
 
 	std::signal(SIGINT, [](int code) {
