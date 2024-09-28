@@ -220,13 +220,13 @@ int main (int argc, char *argv[]) {
 		res.set_content(content, "text/css");
 	});
 
-	httpServer.Get("/discord-login", [&oauth_token](const httplib::Request &req, httplib::Response &res) {
+	httpServer.Get("/discord-login", [&oauth_token, &sql, &discord_db, &db_result, &errMsg](const httplib::Request &req, httplib::Response &res) {
 		if (req.has_param("code")) {
 			std::string code = req.get_param_value("code");
 			httplib::Params params = {
 				{ "grant_type", "authorization_code" },
 				{ "code", code },
-				{ "authorization_url", "http://dustbot.xyz/discord-login" }
+				{ "redirect_uri", "https://dustbot.xyz/discord-login" }
 			};
 			std::string paramsString = "";
 			bool first = true;
@@ -238,35 +238,70 @@ int main (int argc, char *argv[]) {
 					paramsString += "&" + param.first + "=" + param.second;
 				}
 			}
-			std::cout << paramsString << std::endl;
-			httplib::SSLClient httpClient("discord.com", 443);
-			httpClient.set_basic_auth("1234389167576977458", oauth_token);
-			httplib::Result getTokenResult = httpClient.Post("/api/v10/oauth2/token", paramsString, "application/x-www-form-urlencoded");
+			httplib::SSLClient tokenClient("discord.com", 443);
+			tokenClient.set_basic_auth("1234389167576977458", oauth_token);
+			httplib::Result getTokenResult = tokenClient.Post("/api/v10/oauth2/token", paramsString, "application/x-www-form-urlencoded");
 			if (getTokenResult) {
 				json getTokenJson = json::parse(getTokenResult->body);
 				if (getTokenJson.contains("access_token")) {
-					httpClient.set_basic_auth(getTokenJson["token_type"], getTokenJson["access_token"]);
-					httplib::Result getUserResult = httpClient.Get("/api/v10/users/@me");
+					httplib::SSLClient bearerClient("discord.com", 443);
+					bearerClient.set_bearer_token_auth(getTokenJson["access_token"]);
+					httplib::Result getUserResult = bearerClient.Get("/api/v10/users/@me");
 					json getUserJson = json::parse(getUserResult->body);
-					sql = "INSERT INTO OAuth2Users(id, name, access_token, token_type, expiry, refresh_token, scope) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE";
-					db_result = sqlite3_prepare_v2(discord_db, sql.c_str(), -1, &stmt, nullptr);
+					sql = "INSERT OR REPLACE INTO OAuth2Users(id, name, access_token, token_type, expiry, refresh_token, scope) VALUES (?,?,?,?,?,?,?)";
 					sqlite3_stmt *stmt = nullptr;
+					db_result = sqlite3_prepare_v2(discord_db, sql.c_str(), -1, &stmt, nullptr);
 					if (db_result != SQLITE_OK) {
 						std::cerr << "SQL Prepare v2 Error: " << sqlite3_errmsg(discord_db) << std::endl;
 						sqlite3_free(errMsg);
 					}
-					sqlite3_bind_int64(stmt, 1, getUserJson["id"]); // I'm getting way too lazy to error check this every single time.
-					sqlite3_bind_text(stmt, 2, getUserJson["username"]);
-					sqlite3_bind_text(stmt, 3, getTokenJson["access_token"]);
-					sqlite3_bind_text(stmt, 4, getTokenJson["token_type"]);
-					int64_t seconds_since_epoch = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-					int64_t token_expiry = seconds_since_epoch + getTokenJson["expires_in"];
-					sqlite3_bind_int64(stmt, 5, token_expiry);
-					sqlite3_bind_text(stmt, 6, getTokenJson["refresh_token"]);
-					sqlite3_bind_text(stmt, 7, getTokenJson["scope"]);
+					db_result = sqlite3_bind_int64(stmt, 1, std::stoll(getUserJson["id"].get<std::string>()));
+					if (db_result != SQLITE_OK) {
+						std::cerr << "SQL Bind int64 Error: " << sqlite3_errmsg(discord_db) << std::endl;
+						sqlite3_free(errMsg);
+					}
+					db_result = sqlite3_bind_text(stmt, 2, getUserJson["username"].get<std::string>().c_str(), -1, SQLITE_STATIC);
+					if (db_result != SQLITE_OK) {
+						std::cerr << "SQL Bind Text Error: " << sqlite3_errmsg(discord_db) << std::endl;
+						sqlite3_free(errMsg);
+					}
+					db_result = sqlite3_bind_text(stmt, 3, getTokenJson["access_token"].get<std::string>().c_str(), -1, SQLITE_STATIC);
+					if (db_result != SQLITE_OK) {
+						std::cerr << "SQL Bind Text Error: " << sqlite3_errmsg(discord_db) << std::endl;
+						sqlite3_free(errMsg);
+					}
+					db_result = sqlite3_bind_text(stmt, 4, getTokenJson["token_type"].get<std::string>().c_str(), -1, SQLITE_STATIC);
+					if (db_result != SQLITE_OK) {
+						std::cerr << "SQL Bind Text Error: " << sqlite3_errmsg(discord_db) << std::endl;
+						sqlite3_free(errMsg);
+					}
+					std::chrono::time_point now = std::chrono::steady_clock::now();
+					std::chrono::seconds time_in_seconds = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
+					int64_t token_expiry = time_in_seconds.count() + getTokenJson["expires_in"].get<int64_t>();
+					db_result = sqlite3_bind_int64(stmt, 5, token_expiry);
+					if (db_result != SQLITE_OK) {
+						std::cerr << "SQL Bind int64 Error: " << sqlite3_errmsg(discord_db) << std::endl;
+						sqlite3_free(errMsg);
+					}
+					db_result = sqlite3_bind_text(stmt, 6, getTokenJson["refresh_token"].get<std::string>().c_str(), -1, SQLITE_STATIC);
+					if (db_result != SQLITE_OK) {
+						std::cerr << "SQL Bind Text Error: " << sqlite3_errmsg(discord_db) << std::endl;
+						sqlite3_free(errMsg);
+					}
+					db_result = sqlite3_bind_text(stmt, 7, getTokenJson["scope"].get<std::string>().c_str(), -1, SQLITE_STATIC);
+					if (db_result != SQLITE_OK) {
+						std::cerr << "SQL Bind Text Error: " << sqlite3_errmsg(discord_db) << std::endl;
+						sqlite3_free(errMsg);
+					}
+					db_result = sqlite3_step(stmt);
+					if (db_result != SQLITE_DONE) {
+						std::cerr << "SQL Step Error: " << sqlite3_errmsg(discord_db) << std::endl;
+						sqlite3_free(errMsg);
+					}
+					sqlite3_finalize(stmt);
 				}
 			} else {
-				std::cerr << "Error doing post: " << getTokenResult.error() << std::endl;
+				std::cerr << "Error doing get: " << getTokenResult.error() << std::endl;
 			}
 		}
 		res.set_redirect("/");
