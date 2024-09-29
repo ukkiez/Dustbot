@@ -19,6 +19,8 @@ ul {
 }
 #navigation {
 	padding: 10px;
+	background-color: #111111;
+	border-bottom: 2px solid #444444;
 }
 #navigation > ul {
 	display: flex;
@@ -41,4 +43,23 @@ ul {
 	margin-right: 20px;
 	margin-left: auto;
 	border: 1px solid #000000;
+}
+#channels {
+	width: max-content;
+	margin-top: 5px;
+	margin-left: 5px;
+}
+#channels > ul > li {
+	border: 2px solid #111;
+	border-radius: 20px;
+	background-color: #444444;
+	margin-bottom: 5px;
+}
+#channels > ul > li > a {
+	display: block;
+	padding: 14px;
+	color: #00abff;
+}
+.selected {
+	color: #00b109 !important;
 }
