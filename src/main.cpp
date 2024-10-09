@@ -275,7 +275,7 @@ int main (int argc, char *argv[]) {
 						std::cerr << "SQL Bind Text Error: " << sqlite3_errmsg(discord_db) << std::endl;
 						sqlite3_free(errMsg);
 					}
-					std::chrono::time_point now = std::chrono::steady_clock::now();
+					std::chrono::time_point now = std::chrono::system_clock::now();
 					std::chrono::seconds time_in_seconds = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
 					int64_t token_expiry = time_in_seconds.count() + getTokenJson["expires_in"].get<int64_t>();
 					db_result = sqlite3_bind_int64(stmt, 5, token_expiry);

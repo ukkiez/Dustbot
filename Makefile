@@ -4,20 +4,24 @@ OBJ=obj
 CFLAGS=-g -Wall -std=c++20
 LIBS=-lsqlite3 -ldpp -lssl -lcrypto
 
-SRCS=$(wildcard $(SRC)/*.cpp)
-OBJS=$(patsubst $(SRC)/%.cpp,$(OBJ)/%.o,$(SRCS))
+MAIN_OBJS=obj/main.o
+TEST_OBJS=obj/test.o
 
 BINDIR=bin
-BIN=$(BINDIR)/main
+BIN_MAIN=$(BINDIR)/main
+BIN_TEST=$(BINDIR)/test
 
-all: $(BIN)
+all: $(BIN_MAIN) $(BIN_TEST)
 
 release: CFLAGS=-Wall -O2 -DNDEBUG -std=c++20
 release: clean
 release: $(BIN)
 
-$(BIN): $(OBJS)
-	$(CC) $(CFLAGS) $(OBJS) -o $@ $(LIBS)
+$(BIN_MAIN): $(MAIN_OBJS)
+	$(CC) $(CFLAGS) $(MAIN_OBJS) -o $@ $(LIBS)
+
+$(BIN_TEST): $(TEST_OBJS)
+	$(CC) $(CFLAGS) $(TEST_OBJS) -o $@ $(LIBS)
 
 $(OBJ)/%.o: $(SRC)/%.cpp
 	$(CC) $(CFLAGS) -c $< -o $@
