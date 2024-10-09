@@ -27,6 +27,27 @@ int SQLiteCallback (void *unused, int count, char **data, char **columns) {
 	return 0;
 }
 
+std::string generate_session_token(uint32_t length) {
+    std::ifstream urandom("/dev/urandom");
+    std::string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&'*+-.^_`|~";
+    std::string sessionId;
+    sessionId.reserve(length);
+
+    std::random_device rd;
+    std::mt19937 generator(rd());
+    std::uniform_int_distribution<int> distribution(0, chars.size() - 1);
+
+    for (int i = 0; i < length; ++i) {
+        char random_char;
+        urandom.read(&random_char, 1);
+        int index = distribution(generator) % chars.size();
+        sessionId += chars[index];
+    }
+
+    urandom.close();
+    return sessionId;
+}
+
 int main (int argc, char *argv[]) {
 	std::string app_directory = std::string(argv[0]);
 	app_directory.erase(app_directory.find_last_of('/')+1); // Remove /executeable_name from app directory.
@@ -72,7 +93,8 @@ int main (int argc, char *argv[]) {
 		"token_type TEXT NOT NULL," +
 		"expiry BIGINT NOT NULL," +
 		"refresh_token TEXT NOT NULL," +
-		"scope TEXT NOT NULL" +
+		"scope TEXT NOT NULL," +
+		"session_token NOT NULL" +
 	")";
 	db_result = sqlite3_exec(discord_db, sql.c_str(), SQLiteCallback, NULL, &errMsg);
 	if (db_result != SQLITE_OK) {
@@ -221,6 +243,8 @@ int main (int argc, char *argv[]) {
 	});
 
 	httpServer.Get("/discord-login", [&oauth_token, &sql, &discord_db, &db_result, &errMsg](const httplib::Request &req, httplib::Response &res) {
+		std::string session_token = "";
+		uint64_t discord_id;
 		if (req.has_param("code")) {
 			std::string code = req.get_param_value("code");
 			httplib::Params params = {
@@ -248,14 +272,15 @@ int main (int argc, char *argv[]) {
 					bearerClient.set_bearer_token_auth(getTokenJson["access_token"]);
 					httplib::Result getUserResult = bearerClient.Get("/api/v10/users/@me");
 					json getUserJson = json::parse(getUserResult->body);
-					sql = "INSERT OR REPLACE INTO OAuth2Users(id, name, access_token, token_type, expiry, refresh_token, scope) VALUES (?,?,?,?,?,?,?)";
+					sql = "INSERT OR REPLACE INTO OAuth2Users(id, name, access_token, token_type, expiry, refresh_token, scope, session_token) VALUES (?,?,?,?,?,?,?,?)";
 					sqlite3_stmt *stmt = nullptr;
 					db_result = sqlite3_prepare_v2(discord_db, sql.c_str(), -1, &stmt, nullptr);
 					if (db_result != SQLITE_OK) {
 						std::cerr << "SQL Prepare v2 Error: " << sqlite3_errmsg(discord_db) << std::endl;
 						sqlite3_free(errMsg);
 					}
-					db_result = sqlite3_bind_int64(stmt, 1, std::stoll(getUserJson["id"].get<std::string>()));
+					discord_id = std::stoll(getUserJson["id"].get<std::string>());
+					db_result = sqlite3_bind_int64(stmt, 1, discord_id);
 					if (db_result != SQLITE_OK) {
 						std::cerr << "SQL Bind int64 Error: " << sqlite3_errmsg(discord_db) << std::endl;
 						sqlite3_free(errMsg);
@@ -293,6 +318,12 @@ int main (int argc, char *argv[]) {
 						std::cerr << "SQL Bind Text Error: " << sqlite3_errmsg(discord_db) << std::endl;
 						sqlite3_free(errMsg);
 					}
+					session_token = generate_session_token(128);
+					db_result = sqlite3_bind_text(stmt, 8, session_token.c_str(), -1, SQLITE_STATIC);
+					if (db_result != SQLITE_OK) {
+						std::cerr << "SQL Bind Text Error: " << sqlite3_errmsg(discord_db) << std::endl;
+						sqlite3_free(errMsg);
+					}
 					db_result = sqlite3_step(stmt);
 					if (db_result != SQLITE_DONE) {
 						std::cerr << "SQL Step Error: " << sqlite3_errmsg(discord_db) << std::endl;
@@ -303,6 +334,11 @@ int main (int argc, char *argv[]) {
 			} else {
 				std::cerr << "Error doing get: " << getTokenResult.error() << std::endl;
 			}
+		}
+		if (session_token != "") {
+			std::string cookie = "session_token=" + session_token + "; Path=/; Secure; HttpOnly";
+			res.set_header("Set-Cookie", "discord_id=" + std::to_string(discord_id) + "; Path=/; Secure; HttpOnly");
+			res.set_header("Set-Cookie", "session_token=" + session_token + "; Path=/; Secure; HttpOnly");
 		}
 		res.set_redirect("/");
 	});
