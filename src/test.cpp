@@ -31,7 +31,6 @@ std::string generate_session_token(uint32_t length) {
 
 int main () {
 	std::string token = generate_session_token(128);
-	std::cout << token << std::endl << std::endl;
-	std::cout << token.c_str() << std::endl << std::endl;
+	std::cout << token << std::endl;
 	return 0;
 }

@@ -3,7 +3,17 @@
 <head>
 	<meta charset="utf-8">
 	<title>Dustbot - Home</title>
-	<link rel="stylesheet" href="style.css">
+	<link rel="stylesheet" href="/style.css">
+	<script>
+		(async function () {
+			let response = await fetch("https://dustbot.xyz/json");
+			let data = await response.json();
+			if (data.verified === false) {
+				let discord_login = document.getElementById("discord-login");
+				discord_login.style.display = "block";
+			}
+		})();
+	</script>
 </head>
 <body>
 	<nav id="navigation">
@@ -15,7 +25,7 @@
 			</li>
 		</ul>
 	</nav>
-	<nav id="channels">
+	<!--<nav id="channels">
 		<ul>
 			<li><a href="#" class="selected">#General</a></li>
 			<li><a href="#">#Programming</a></li>
@@ -26,6 +36,6 @@
 			<li><a href="#">sit</a></li>
 			<li><a href="#">amit</a></li>
 		</ul>
-	</nav>
+	</nav>-->
 </body>
 </html>

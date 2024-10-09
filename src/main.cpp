@@ -27,30 +27,42 @@ int SQLiteCallback (void *unused, int count, char **data, char **columns) {
 	return 0;
 }
 
-std::string generate_session_token(uint32_t length) {
-    std::ifstream urandom("/dev/urandom");
-    std::string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&'*+-.^_`|~";
-    std::string sessionId;
-    sessionId.reserve(length);
-
-    std::random_device rd;
-    std::mt19937 generator(rd());
-    std::uniform_int_distribution<int> distribution(0, chars.size() - 1);
-
-    for (int i = 0; i < length; ++i) {
-        char random_char;
-        urandom.read(&random_char, 1);
-        int index = distribution(generator) % chars.size();
-        sessionId += chars[index];
+std::vector<std::string> split(const std::string& string, const std::string& delimiter) {
+    std::vector<std::string> result;
+    size_t position = 0;
+    size_t nextPos;
+    while ((nextPos = string.find(delimiter, position)) != std::string::npos) {
+        result.push_back(string.substr(position, nextPos - position));
+        position = nextPos + delimiter.size();
     }
+    result.push_back(string.substr(position));
+    return result;
+}
 
-    urandom.close();
-    return sessionId;
+std::string generate_session_token(uint32_t length) {
+	std::ifstream urandom("/dev/urandom");
+	std::string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&'*+-.^_`|~";
+	std::string sessionId;
+	sessionId.reserve(length);
+
+	std::random_device rd;
+	std::mt19937 generator(rd());
+	std::uniform_int_distribution<int> distribution(0, chars.size() - 1);
+
+	for (int i = 0; i < length; ++i) {
+		char random_char;
+		urandom.read(&random_char, 1);
+		int index = distribution(generator) % chars.size();
+		sessionId += chars[index];
+	}
+
+	urandom.close();
+	return sessionId;
 }
 
 int main (int argc, char *argv[]) {
 	std::string app_directory = std::string(argv[0]);
-	app_directory.erase(app_directory.find_last_of('/')+1); // Remove /executeable_name from app directory.
+	app_directory.erase(app_directory.find_last_of('/') + 1); // Remove /executeable_name from app directory.
 
 	std::string bot_token;
 	std::ifstream bot_token_file(app_directory + "../bot_token.txt");
@@ -242,6 +254,67 @@ int main (int argc, char *argv[]) {
 		res.set_content(content, "text/css");
 	});
 
+	httpServer.Get("/main.js", [&app_directory](const httplib::Request &req, httplib::Response &res) {
+		std::ifstream file(app_directory + "../web/main.js");
+		std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+		res.set_content(content, "application/javascript");
+	});
+
+	httpServer.Get("/json", [&discord_db, &sql, &errMsg, &db_result](const httplib::Request &req, httplib::Response &res) {
+		json content = { };
+		content["verified"] = false;
+		uint64_t discord_id = 0;
+		std::string session_token = "";
+		if (req.has_header("Cookie")) {
+			std::string cookieHeader = req.get_header_value("Cookie");
+			std::vector<std::string> cookies = split(cookieHeader, "; ");
+			for (std::string &cookie : cookies) {
+				std::string key, value;
+				uint32_t index = cookie.find("=");
+				key = cookie.substr(0, index);
+				value = cookie.substr(index + 1);
+				if (key == "discord_id") {
+					try {
+						discord_id = std::stoull(value);
+					} catch (std::invalid_argument &e) {
+						std::cerr << "Invalid argument: " << e.what() << std::endl;
+					} catch (std::out_of_range &e) {
+						std::cerr << "Out of range: " << e.what() << std::endl;
+					}
+				}
+				if (key == "session_token") {
+					session_token = value;
+				}
+			}
+		}
+		if (discord_id != 0 && session_token != "") {
+			sql = "SELECT session_token FROM OAuth2Users WHERE id=?";
+			sqlite3_stmt *stmt = nullptr;
+
+			db_result = sqlite3_prepare_v2(discord_db, sql.c_str(), -1, &stmt, nullptr);
+			if (db_result != SQLITE_OK) {
+				std::cerr << "SQL Prepare v2 Error: " << sqlite3_errmsg(discord_db) << std::endl;
+				sqlite3_free(errMsg);
+			}
+
+			db_result = sqlite3_bind_int64(stmt, 1, discord_id);
+			if (db_result != SQLITE_OK) {
+				std::cerr << "SQL Bind int64 Error: " << sqlite3_errmsg(discord_db) << std::endl;
+				sqlite3_free(errMsg);
+			}
+
+			if (sqlite3_step(stmt) == SQLITE_ROW) {
+				std::string db_session_token = (const char*)sqlite3_column_text(stmt, 0);
+				if (session_token == db_session_token) {
+					content["verified"] = true;
+				}
+			}
+
+			sqlite3_finalize(stmt);
+		}
+		res.set_content(content.dump(), "application/json");
+	});
+
 	httpServer.Get("/discord-login", [&oauth_token, &sql, &discord_db, &db_result, &errMsg](const httplib::Request &req, httplib::Response &res) {
 		std::string session_token = "";
 		uint64_t discord_id;
@@ -279,7 +352,7 @@ int main (int argc, char *argv[]) {
 						std::cerr << "SQL Prepare v2 Error: " << sqlite3_errmsg(discord_db) << std::endl;
 						sqlite3_free(errMsg);
 					}
-					discord_id = std::stoll(getUserJson["id"].get<std::string>());
+					discord_id = std::stoull(getUserJson["id"].get<std::string>());
 					db_result = sqlite3_bind_int64(stmt, 1, discord_id);
 					if (db_result != SQLITE_OK) {
 						std::cerr << "SQL Bind int64 Error: " << sqlite3_errmsg(discord_db) << std::endl;
@@ -336,7 +409,6 @@ int main (int argc, char *argv[]) {
 			}
 		}
 		if (session_token != "") {
-			std::string cookie = "session_token=" + session_token + "; Path=/; Secure; HttpOnly";
 			res.set_header("Set-Cookie", "discord_id=" + std::to_string(discord_id) + "; Path=/; Secure; HttpOnly");
 			res.set_header("Set-Cookie", "session_token=" + session_token + "; Path=/; Secure; HttpOnly");
 		}
